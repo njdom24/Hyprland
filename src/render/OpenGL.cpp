@@ -969,6 +969,7 @@ static void getCMShaderUniforms(SShader& shader) {
     shader.uniformLocations[SHADER_DST_TF_RANGE]      = glGetUniformLocation(shader.program, "dstTFRange");
     shader.uniformLocations[SHADER_TARGET_PRIMARIES]  = glGetUniformLocation(shader.program, "targetPrimaries");
     shader.uniformLocations[SHADER_MAX_LUMINANCE]     = glGetUniformLocation(shader.program, "maxLuminance");
+    shader.uniformLocations[SHADER_SRC_REF_LUMINANCE] = glGetUniformLocation(shader.program, "srcRefLuminance");
     shader.uniformLocations[SHADER_DST_MAX_LUMINANCE] = glGetUniformLocation(shader.program, "dstMaxLuminance");
     shader.uniformLocations[SHADER_DST_REF_LUMINANCE] = glGetUniformLocation(shader.program, "dstRefLuminance");
     shader.uniformLocations[SHADER_SDR_SATURATION]    = glGetUniformLocation(shader.program, "sdrSaturation");
@@ -1592,7 +1593,8 @@ void CHyprOpenGLImpl::passCMUniforms(SShader& shader, const NColorManagement::SI
     const float maxLuminance = imageDescription.luminances.max > 0 ? imageDescription.luminances.max : imageDescription.luminances.reference;
     shader.setUniformFloat(SHADER_MAX_LUMINANCE, maxLuminance * targetImageDescription.luminances.reference / imageDescription.luminances.reference);
     shader.setUniformFloat(SHADER_DST_MAX_LUMINANCE, targetImageDescription.luminances.max > 0 ? targetImageDescription.luminances.max : 10000);
-    shader.setUniformFloat(SHADER_DST_REF_LUMINANCE, targetImageDescription.luminances.reference);
+    shader.setUniformFloat(SHADER_SRC_REF_LUMINANCE, imageDescription.getTFRefLuminance(-1));
+    shader.setUniformFloat(SHADER_DST_REF_LUMINANCE, targetImageDescription.getTFRefLuminance(-1));
     shader.setUniformFloat(SHADER_SDR_SATURATION, needsSDRmod && m_renderData.pMonitor->m_sdrSaturation > 0 ? m_renderData.pMonitor->m_sdrSaturation : 1.0f);
     shader.setUniformFloat(SHADER_SDR_BRIGHTNESS, needsSDRmod && m_renderData.pMonitor->m_sdrBrightness > 0 ? m_renderData.pMonitor->m_sdrBrightness : 1.0f);
     const auto cacheKey = std::make_pair(imageDescription.getId(), targetImageDescription.getId());
@@ -1708,10 +1710,9 @@ void CHyprOpenGLImpl::renderTextureInternal(SP<CTexture> tex, const CBox& box, c
     if (shader == &m_shaders->m_shCM) {
         shader->setUniformInt(SHADER_TEX_TYPE, texType);
         if (data.cmBackToSRGB) {
-            // revert luma changes to avoid black screenshots.
-            // this will likely not be 1:1, and might cause screenshots to be too bright, but it's better than pitch black.
-            imageDescription.luminances = {};
-            passCMUniforms(*shader, imageDescription, NColorManagement::SImageDescription{}, true, -1, -1);
+            static auto PSDREOTF      = CConfigValue<Hyprlang::INT>("render:cm_sdr_eotf");
+            auto        chosenSdrEotf = *PSDREOTF > 0 ? NColorManagement::CM_TRANSFER_FUNCTION_GAMMA22 : NColorManagement::CM_TRANSFER_FUNCTION_SRGB;
+            passCMUniforms(*shader, imageDescription, NColorManagement::SImageDescription{.transferFunction = chosenSdrEotf}, true, -1, -1);
         } else
             passCMUniforms(*shader, imageDescription);
     }
