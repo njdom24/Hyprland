@@ -781,6 +781,7 @@ CConfigManager::CConfigManager() {
     registerConfigVar("render:cm_auto_hdr", Hyprlang::INT{1});
     registerConfigVar("render:new_render_scheduling", Hyprlang::INT{0});
     registerConfigVar("render:non_shader_cm", Hyprlang::INT{2});
+    registerConfigVar("render:cm_sdr_eotf", Hyprlang::INT{0});
 
     registerConfigVar("ecosystem:no_update_news", Hyprlang::INT{0});
     registerConfigVar("ecosystem:no_donation_nag", Hyprlang::INT{0});
@@ -842,6 +843,7 @@ CConfigManager::CConfigManager() {
     m_config->addSpecialConfigValue("monitorv2", "mirror", {STRVAL_EMPTY});
     m_config->addSpecialConfigValue("monitorv2", "bitdepth", {STRVAL_EMPTY}); // TODO use correct type
     m_config->addSpecialConfigValue("monitorv2", "cm", {"auto"});
+    m_config->addSpecialConfigValue("monitorv2", "sdr_eotf", Hyprlang::INT{0});
     m_config->addSpecialConfigValue("monitorv2", "sdrbrightness", Hyprlang::FLOAT{1.0});
     m_config->addSpecialConfigValue("monitorv2", "sdrsaturation", Hyprlang::FLOAT{1.0});
     m_config->addSpecialConfigValue("monitorv2", "vrr", Hyprlang::INT{0});
@@ -1115,6 +1117,9 @@ std::optional<std::string> CConfigManager::handleMonitorv2(const std::string& ou
     VAL = m_config->getSpecialConfigValuePtr("monitorv2", "cm", output.c_str());
     if (VAL && VAL->m_bSetByUser)
         parser.parseCM(std::any_cast<Hyprlang::STRING>(VAL->getValue()));
+    VAL = m_config->getSpecialConfigValuePtr("monitorv2", "sdr_eotf", output.c_str());
+    if (VAL && VAL->m_bSetByUser)
+        parser.rule().sdrEotf = std::any_cast<Hyprlang::INT>(VAL->getValue());
     VAL = m_config->getSpecialConfigValuePtr("monitorv2", "sdrbrightness", output.c_str());
     if (VAL && VAL->m_bSetByUser)
         parser.rule().sdrBrightness = std::any_cast<Hyprlang::FLOAT>(VAL->getValue());
@@ -2396,12 +2401,12 @@ std::optional<std::string> CConfigManager::handleMonitor(const std::string& comm
             parser.parseVRR(ARGS[argno + 1]);
             argno++;
         } else if (ARGS[argno] == "workspace") {
-            const auto& [id, name] = getWorkspaceIDNameFromString(ARGS[argno + 1]);
+            const auto& [id, name, isAutoID] = getWorkspaceIDNameFromString(ARGS[argno + 1]);
 
             SWorkspaceRule wsRule;
             wsRule.monitor         = parser.name();
             wsRule.workspaceString = ARGS[argno + 1];
-            wsRule.workspaceId     = id;
+            wsRule.workspaceId     = isAutoID ? WORKSPACE_INVALID : id;
             wsRule.workspaceName   = name;
 
             m_workspaceRules.emplace_back(wsRule);
@@ -2915,7 +2920,7 @@ std::optional<std::string> CConfigManager::handleWorkspaceRules(const std::strin
 
     auto       first_ident = trim(value.substr(0, FIRST_DELIM));
 
-    const auto& [id, name] = getWorkspaceIDNameFromString(first_ident);
+    const auto& [id, name, isAutoID] = getWorkspaceIDNameFromString(first_ident);
 
     auto           rules = value.substr(FIRST_DELIM + 1);
     SWorkspaceRule wsRule;
@@ -3015,8 +3020,8 @@ std::optional<std::string> CConfigManager::handleWorkspaceRules(const std::strin
             return R;
     }
 
-    wsRule.workspaceId   = id;
     wsRule.workspaceName = name;
+    wsRule.workspaceId   = isAutoID ? WORKSPACE_INVALID : id;
 
     const auto IT = std::ranges::find_if(m_workspaceRules, [&](const auto& other) { return other.workspaceString == wsRule.workspaceString; });
 

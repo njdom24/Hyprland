@@ -483,8 +483,8 @@ std::optional<std::vector<uint64_t>> CHyprOpenGLImpl::getModsForFormat(EGLint fo
     }
 
     // if the driver doesn't mark linear as external, add it. It's allowed unless the driver says otherwise. (e.g. nvidia)
-    if (!linearIsExternal && std::ranges::find(mods, DRM_FORMAT_MOD_LINEAR) == mods.end() && mods.empty())
-        mods.push_back(DRM_FORMAT_MOD_LINEAR);
+    if (!linearIsExternal && std::ranges::find(mods, DRM_FORMAT_MOD_LINEAR) == mods.end())
+        result.push_back(DRM_FORMAT_MOD_LINEAR);
 
     return result;
 }
@@ -582,8 +582,8 @@ void CHyprOpenGLImpl::initDRMFormats() {
 }
 
 EGLImageKHR CHyprOpenGLImpl::createEGLImage(const Aquamarine::SDMABUFAttrs& attrs) {
-    std::array<uint32_t, 50> attribs;
-    size_t                   idx = 0;
+    std::array<EGLint, 50> attribs;
+    size_t                 idx = 0;
 
     attribs[idx++] = EGL_WIDTH;
     attribs[idx++] = attrs.size.x;
@@ -626,7 +626,7 @@ EGLImageKHR CHyprOpenGLImpl::createEGLImage(const Aquamarine::SDMABUFAttrs& attr
 
     RASSERT(idx <= attribs.size(), "createEglImage: attribs array out of bounds.");
 
-    EGLImageKHR image = m_proc.eglCreateImageKHR(m_eglDisplay, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, rc<int*>(attribs.data()));
+    EGLImageKHR image = m_proc.eglCreateImageKHR(m_eglDisplay, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, attribs.data());
     if (image == EGL_NO_IMAGE_KHR) {
         Debug::log(ERR, "EGL: EGLCreateImageKHR failed: {}", eglGetError());
         return EGL_NO_IMAGE_KHR;
@@ -969,6 +969,7 @@ static void getCMShaderUniforms(SShader& shader) {
     shader.uniformLocations[SHADER_DST_TF_RANGE]      = glGetUniformLocation(shader.program, "dstTFRange");
     shader.uniformLocations[SHADER_TARGET_PRIMARIES]  = glGetUniformLocation(shader.program, "targetPrimaries");
     shader.uniformLocations[SHADER_MAX_LUMINANCE]     = glGetUniformLocation(shader.program, "maxLuminance");
+    shader.uniformLocations[SHADER_SRC_REF_LUMINANCE] = glGetUniformLocation(shader.program, "srcRefLuminance");
     shader.uniformLocations[SHADER_DST_MAX_LUMINANCE] = glGetUniformLocation(shader.program, "dstMaxLuminance");
     shader.uniformLocations[SHADER_DST_REF_LUMINANCE] = glGetUniformLocation(shader.program, "dstRefLuminance");
     shader.uniformLocations[SHADER_SDR_SATURATION]    = glGetUniformLocation(shader.program, "sdrSaturation");
@@ -1552,14 +1553,24 @@ static std::map<std::pair<uint32_t, uint32_t>, std::array<GLfloat, 9>> primaries
 
 static bool isSDR2HDR(const NColorManagement::SImageDescription& imageDescription, const NColorManagement::SImageDescription& targetImageDescription) {
     // might be too strict
-    return imageDescription.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_SRGB &&
+    return (imageDescription.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_SRGB ||
+            imageDescription.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_GAMMA22) &&
         (targetImageDescription.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_ST2084_PQ ||
          targetImageDescription.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_HLG);
 }
 
 void CHyprOpenGLImpl::passCMUniforms(SShader& shader, const NColorManagement::SImageDescription& imageDescription,
                                      const NColorManagement::SImageDescription& targetImageDescription, bool modifySDR, float sdrMinLuminance, int sdrMaxLuminance) {
-    shader.setUniformInt(SHADER_SOURCE_TF, imageDescription.transferFunction);
+    static auto PSDREOTF = CConfigValue<Hyprlang::INT>("render:cm_sdr_eotf");
+
+    if (m_renderData.surface.valid() &&
+        ((!m_renderData.surface->m_colorManagement.valid() && *PSDREOTF >= 1) ||
+         (*PSDREOTF == 2 && m_renderData.surface->m_colorManagement.valid() &&
+          imageDescription.transferFunction == NColorManagement::eTransferFunction::CM_TRANSFER_FUNCTION_SRGB))) {
+        shader.setUniformInt(SHADER_SOURCE_TF, NColorManagement::eTransferFunction::CM_TRANSFER_FUNCTION_GAMMA22);
+    } else
+        shader.setUniformInt(SHADER_SOURCE_TF, imageDescription.transferFunction);
+
     shader.setUniformInt(SHADER_TARGET_TF, targetImageDescription.transferFunction);
 
     const auto                   targetPrimaries = targetImageDescription.primariesNameSet || targetImageDescription.primaries == SPCPRimaries{} ?
@@ -1582,7 +1593,8 @@ void CHyprOpenGLImpl::passCMUniforms(SShader& shader, const NColorManagement::SI
     const float maxLuminance = imageDescription.luminances.max > 0 ? imageDescription.luminances.max : imageDescription.luminances.reference;
     shader.setUniformFloat(SHADER_MAX_LUMINANCE, maxLuminance * targetImageDescription.luminances.reference / imageDescription.luminances.reference);
     shader.setUniformFloat(SHADER_DST_MAX_LUMINANCE, targetImageDescription.luminances.max > 0 ? targetImageDescription.luminances.max : 10000);
-    shader.setUniformFloat(SHADER_DST_REF_LUMINANCE, targetImageDescription.luminances.reference);
+    shader.setUniformFloat(SHADER_SRC_REF_LUMINANCE, imageDescription.getTFRefLuminance(-1));
+    shader.setUniformFloat(SHADER_DST_REF_LUMINANCE, targetImageDescription.getTFRefLuminance(-1));
     shader.setUniformFloat(SHADER_SDR_SATURATION, needsSDRmod && m_renderData.pMonitor->m_sdrSaturation > 0 ? m_renderData.pMonitor->m_sdrSaturation : 1.0f);
     shader.setUniformFloat(SHADER_SDR_BRIGHTNESS, needsSDRmod && m_renderData.pMonitor->m_sdrBrightness > 0 ? m_renderData.pMonitor->m_sdrBrightness : 1.0f);
     const auto cacheKey = std::make_pair(imageDescription.getId(), targetImageDescription.getId());
@@ -1698,10 +1710,9 @@ void CHyprOpenGLImpl::renderTextureInternal(SP<CTexture> tex, const CBox& box, c
     if (shader == &m_shaders->m_shCM) {
         shader->setUniformInt(SHADER_TEX_TYPE, texType);
         if (data.cmBackToSRGB) {
-            // revert luma changes to avoid black screenshots.
-            // this will likely not be 1:1, and might cause screenshots to be too bright, but it's better than pitch black.
-            imageDescription.luminances = {};
-            passCMUniforms(*shader, imageDescription, NColorManagement::SImageDescription{}, true, -1, -1);
+            static auto PSDREOTF      = CConfigValue<Hyprlang::INT>("render:cm_sdr_eotf");
+            auto        chosenSdrEotf = *PSDREOTF > 0 ? NColorManagement::CM_TRANSFER_FUNCTION_GAMMA22 : NColorManagement::CM_TRANSFER_FUNCTION_SRGB;
+            passCMUniforms(*shader, imageDescription, NColorManagement::SImageDescription{.transferFunction = chosenSdrEotf}, true, -1, -1);
         } else
             passCMUniforms(*shader, imageDescription);
     }
@@ -3323,7 +3334,7 @@ uint32_t CHyprOpenGLImpl::getPreferredReadFormat(PHLMONITOR pMonitor) {
 
     auto fmt = pMonitor->m_output->state->state().drmFormat;
 
-    if (fmt == DRM_FORMAT_BGRA1010102 || fmt == DRM_FORMAT_ARGB2101010 || fmt == DRM_FORMAT_XRGB2101010 || fmt == DRM_FORMAT_BGRX1010102)
+    if (fmt == DRM_FORMAT_BGRA1010102 || fmt == DRM_FORMAT_ARGB2101010 || fmt == DRM_FORMAT_XRGB2101010 || fmt == DRM_FORMAT_BGRX1010102 || fmt == DRM_FORMAT_XBGR2101010)
         return DRM_FORMAT_XRGB8888;
 
     return fmt;
