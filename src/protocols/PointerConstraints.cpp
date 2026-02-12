@@ -32,8 +32,6 @@ CPointerConstraint::CPointerConstraint(SP<CZwpLockedPointerV1> resource_, SP<CWL
         if (!m_hlSurface)
             return;
 
-        m_hintSet = true;
-
         float      scale   = 1.f;
         const auto PWINDOW = Desktop::View::CWindow::fromView(m_hlSurface->view());
         if (PWINDOW) {
@@ -41,7 +39,13 @@ CPointerConstraint::CPointerConstraint(SP<CZwpLockedPointerV1> resource_, SP<CWL
             scale            = ISXWL && *PXWLFORCESCALEZERO ? PWINDOW->m_X11SurfaceScaledBy : 1.f;
         }
 
-        m_positionHint = {wl_fixed_to_double(x) / scale, wl_fixed_to_double(y) / scale};
+        const Vector2D newHint = {wl_fixed_to_double(x) / scale, wl_fixed_to_double(y) / scale};
+
+        if (m_hintSet && m_positionHint == newHint)
+            return;
+
+        m_hintSet      = true;
+        m_positionHint = newHint;
         g_pInputManager->simulateMouseMovement();
     });
 

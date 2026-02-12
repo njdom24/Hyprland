@@ -1760,7 +1760,7 @@ uint16_t CMonitor::isDSBlocked(bool full) {
     }
 
     if (*PDIRECTSCANOUT == 2) {
-        if (!m_activeWorkspace || !m_activeWorkspace->m_hasFullscreenWindow || m_activeWorkspace->m_fullscreenMode != FSMODE_FULLSCREEN) {
+        if (!m_activeWorkspace || !m_activeWorkspace->m_hasFullscreenWindow || !(m_activeWorkspace->m_fullscreenMode & (FSMODE_FULLSCREEN | FSMODE_MAXIMIZED))) {
             reasons |= DS_BLOCK_WINDOWED;
             if (!full)
                 return reasons;
@@ -2070,16 +2070,16 @@ bool CMonitor::inHDR() {
 
 bool CMonitor::inFullscreenMode() {
     // Check special workspace first since it renders on top of regular workspaces
-    if (m_activeSpecialWorkspace && m_activeSpecialWorkspace->m_hasFullscreenWindow && m_activeSpecialWorkspace->m_fullscreenMode == FSMODE_FULLSCREEN)
+    if (m_activeSpecialWorkspace && m_activeSpecialWorkspace->m_hasFullscreenWindow && (m_activeSpecialWorkspace->m_fullscreenMode & (FSMODE_FULLSCREEN | FSMODE_MAXIMIZED)))
         return true;
-    return m_activeWorkspace && m_activeWorkspace->m_hasFullscreenWindow && m_activeWorkspace->m_fullscreenMode == FSMODE_FULLSCREEN;
+    return m_activeWorkspace && m_activeWorkspace->m_hasFullscreenWindow && (m_activeWorkspace->m_fullscreenMode & (FSMODE_FULLSCREEN | FSMODE_MAXIMIZED));
 }
 
 PHLWINDOW CMonitor::getFullscreenWindow() {
     // Check special workspace first since it renders on top of regular workspaces
-    if (m_activeSpecialWorkspace && m_activeSpecialWorkspace->m_hasFullscreenWindow && m_activeSpecialWorkspace->m_fullscreenMode == FSMODE_FULLSCREEN)
+    if (m_activeSpecialWorkspace && m_activeSpecialWorkspace->m_hasFullscreenWindow && (m_activeSpecialWorkspace->m_fullscreenMode & (FSMODE_FULLSCREEN | FSMODE_MAXIMIZED)))
         return m_activeSpecialWorkspace->getFullscreenWindow();
-    if (m_activeWorkspace && m_activeWorkspace->m_hasFullscreenWindow && m_activeWorkspace->m_fullscreenMode == FSMODE_FULLSCREEN)
+    if (m_activeWorkspace && m_activeWorkspace->m_hasFullscreenWindow && (m_activeWorkspace->m_fullscreenMode & (FSMODE_FULLSCREEN | FSMODE_MAXIMIZED)))
         return m_activeWorkspace->getFullscreenWindow();
     return nullptr;
 }
